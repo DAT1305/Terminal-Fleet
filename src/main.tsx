@@ -77,6 +77,7 @@ declare global {
       updateAuthRoot: (inputPath: string) => Promise<{ authBaseRoot: string }>
       resetAuthRoot: () => Promise<{ authBaseRoot: string }>
       readClipboardText: () => Promise<string>
+      writeClipboardText: (value: string) => Promise<void>
       renameSession: (sessionId: string, name: string) => Promise<boolean>
       togglePin: (sessionId: string) => Promise<boolean>
       removeSession: (sessionId: string) => Promise<boolean>
@@ -165,6 +166,40 @@ function App() {
     terminal.open(host)
     fitAddon.fit()
 
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') {
+        return true
+      }
+
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c') {
+        const selectedText = terminal.getSelection()
+        if (!selectedText) {
+          return true
+        }
+
+        void window.terminalApi.writeClipboardText(selectedText)
+        terminal.clearSelection()
+        return false
+      }
+
+      const wantsPaste =
+        ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'v') ||
+        (!event.ctrlKey && !event.metaKey && !event.altKey && event.shiftKey && event.key === 'Insert')
+
+      if (wantsPaste) {
+        void window.terminalApi.readClipboardText().then((pastedText) => {
+          if (!pastedText) {
+            return
+          }
+          terminal.focus()
+          void window.terminalApi.sendInput(sessionId, pastedText)
+        })
+        return false
+      }
+
+      return true
+    })
+
     const inputDisposable = terminal.onData((data) => {
       void window.terminalApi.sendInput(sessionId, data)
     })
@@ -190,16 +225,6 @@ function App() {
     }
     const toolLabel = authToolLabelByKey[authTool] ?? authTool
     return `${toolLabel} / ${authProfile ?? 'Default'}`
-  }
-
-  const handleTerminalPaste = async (sessionId: string) => {
-    const pastedText = await window.terminalApi.readClipboardText()
-    if (!pastedText) {
-      return
-    }
-    const liveTerminal = terminalRefs.current.get(sessionId)
-    liveTerminal?.terminal.focus()
-    await window.terminalApi.sendInput(sessionId, pastedText)
   }
 
   const openRename = (session: SessionRecord) => {
@@ -808,10 +833,6 @@ function App() {
                   hostRefs.current.delete(session.id)
                 }}
                 onClick={() => terminalRefs.current.get(session.id)?.terminal.focus()}
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  void handleTerminalPaste(session.id)
-                }}
               />
             ))}
           </div>

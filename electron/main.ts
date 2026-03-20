@@ -74,6 +74,7 @@ let mainWindow: BrowserWindow | null = null
 let statePath = ''
 let settingsPath = ''
 let initialized = false
+let appQuitting = false
 let selectedSessionId: string | null = null
 let authBaseRoot = path.join(os.homedir(), '.multiauth')
 const sessionStates = new Map<string, SessionState>()
@@ -276,11 +277,30 @@ function persistSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(payload, null, 2), 'utf8')
 }
 
-function broadcastSessions() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return
+function canSendToRenderer() {
+  return Boolean(
+    !appQuitting &&
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      !mainWindow.webContents.isDestroyed(),
+  )
+}
+
+function sendToRenderer(channel: string, payload: unknown) {
+  if (!canSendToRenderer()) {
+    return false
   }
-  mainWindow.webContents.send('sessions-updated', snapshot())
+
+  try {
+    mainWindow!.webContents.send(channel, payload)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function broadcastSessions() {
+  sendToRenderer('sessions-updated', snapshot())
 }
 
 function ensureSelectedSession() {
@@ -406,7 +426,7 @@ function spawnSession(state: SessionState) {
       state.lastRunningHintAt = Date.now()
     }
 
-    mainWindow?.webContents.send('terminal-output', {
+    sendToRenderer('terminal-output', {
       sessionId: state.record.id,
       chunk,
     })
@@ -430,7 +450,7 @@ function spawnSession(state: SessionState) {
     state.lastRunningHintAt = null
     state.lastUserEditAt = null
     updateStatus(state, 'closed')
-    mainWindow?.webContents.send('terminal-output', {
+    sendToRenderer('terminal-output', {
       sessionId: state.record.id,
       chunk: `\r\n[terminal exited: ${exitCode}]\r\n`,
     })
@@ -485,6 +505,10 @@ function createWindow() {
       nodeIntegration: false,
       backgroundThrottling: false,
     },
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   return mainWindow.loadFile(rendererHtml)
@@ -723,6 +747,7 @@ ipcMain.handle('terminal:resize', (_event, sessionId: string, cols: number, rows
 })
 
 app.on('before-quit', () => {
+  appQuitting = true
   for (const state of sessionStates.values()) {
     killSession(state)
   }

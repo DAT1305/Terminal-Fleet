@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('terminalApi', {
   updateAuthRoot: (inputPath: string) => ipcRenderer.invoke('settings:update-auth-root', inputPath),
   resetAuthRoot: () => ipcRenderer.invoke('settings:reset-auth-root'),
   readClipboardText: () => clipboard.readText(),
+  writeClipboardText: (value: string) => clipboard.writeText(value),
   renameSession: (sessionId: string, name: string) =>
     ipcRenderer.invoke('sessions:rename', sessionId, name),
   togglePin: (sessionId: string) => ipcRenderer.invoke('sessions:toggle-pin', sessionId),
