@@ -76,6 +76,7 @@ declare global {
       deleteAuthProfile: (authTool: AuthToolKey, profile: string) => Promise<boolean>
       updateAuthRoot: (inputPath: string) => Promise<{ authBaseRoot: string }>
       resetAuthRoot: () => Promise<{ authBaseRoot: string }>
+      readClipboardText: () => Promise<string>
       renameSession: (sessionId: string, name: string) => Promise<boolean>
       togglePin: (sessionId: string) => Promise<boolean>
       removeSession: (sessionId: string) => Promise<boolean>
@@ -189,6 +190,16 @@ function App() {
     }
     const toolLabel = authToolLabelByKey[authTool] ?? authTool
     return `${toolLabel} / ${authProfile ?? 'Default'}`
+  }
+
+  const handleTerminalPaste = async (sessionId: string) => {
+    const pastedText = await window.terminalApi.readClipboardText()
+    if (!pastedText) {
+      return
+    }
+    const liveTerminal = terminalRefs.current.get(sessionId)
+    liveTerminal?.terminal.focus()
+    await window.terminalApi.sendInput(sessionId, pastedText)
   }
 
   const openRename = (session: SessionRecord) => {
@@ -797,6 +808,10 @@ function App() {
                   hostRefs.current.delete(session.id)
                 }}
                 onClick={() => terminalRefs.current.get(session.id)?.terminal.focus()}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  void handleTerminalPaste(session.id)
+                }}
               />
             ))}
           </div>

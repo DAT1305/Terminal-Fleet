@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('terminalApi', {
   init: () => ipcRenderer.invoke('app:init'),
@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('terminalApi', {
     ipcRenderer.invoke('auth:delete-profile', authTool, profile),
   updateAuthRoot: (inputPath: string) => ipcRenderer.invoke('settings:update-auth-root', inputPath),
   resetAuthRoot: () => ipcRenderer.invoke('settings:reset-auth-root'),
+  readClipboardText: () => clipboard.readText(),
   renameSession: (sessionId: string, name: string) =>
     ipcRenderer.invoke('sessions:rename', sessionId, name),
   togglePin: (sessionId: string) => ipcRenderer.invoke('sessions:toggle-pin', sessionId),
