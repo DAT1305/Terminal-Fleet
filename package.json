@@ -1,0 +1,79 @@
+{
+  "name": "terminal-fleet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A lightweight desktop app for managing multiple embedded terminal sessions.",
+  "author": "OpenAI Codex",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:main": "esbuild electron/main.ts electron/preload.ts --platform=node --format=esm --outdir=dist-electron",
+    "build:renderer": "esbuild src/main.tsx --bundle --format=esm --outfile=dist/renderer.js --loader:.tsx=tsx --loader:.ts=ts --loader:.css=css",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "release": "npm run build && electron-builder --win nsis portable",
+    "release:installer": "npm run build && electron-builder --win nsis",
+    "package:exe": "npm run build && electron-packager . \"Terminal Fleet\" --platform=win32 --arch=x64 --icon=assets/app.ico --out=release-packager --overwrite --prune=false --ignore=\"^/release($|/)\" --ignore=\"^/release-packager($|/)\""
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^19.1.0",
+    "electron": "^37.4.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.25.9",
+    "png-to-ico": "^3.0.1"
+  },
+  "build": {
+    "appId": "com.nguyentools.terminal-fleet",
+    "productName": "Terminal Fleet",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "assets/**/*",
+      "dist/**/*",
+      "dist-electron/**/*",
+      "index.html",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "win": {
+      "icon": "assets/app.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Terminal Fleet",
+      "uninstallDisplayName": "Terminal Fleet"
+    }
+  }
+}
