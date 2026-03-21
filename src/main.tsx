@@ -15,6 +15,7 @@ type AuthCatalogItem = {
 
 type SessionRecord = {
   id: string
+  groupId: string
   name: string
   cwd: string
   authTool: AuthToolKey | null
@@ -61,6 +62,20 @@ type LiveTerminal = {
   disposeInput: () => void
 }
 
+type SessionGroup = {
+  id: string
+  root: SessionRecord
+  sessions: SessionRecord[]
+}
+
+type SplitDragState = {
+  groupId: string
+  index: number
+  startX: number
+  startRatios: number[]
+  width: number
+}
+
 declare global {
   interface Window {
     terminalApi: {
@@ -80,6 +95,7 @@ declare global {
       writeClipboardText: (value: string) => Promise<void>
       renameSession: (sessionId: string, name: string) => Promise<boolean>
       togglePin: (sessionId: string) => Promise<boolean>
+      splitSession: (sessionId: string) => Promise<string | null>
       removeSession: (sessionId: string) => Promise<boolean>
       reopenSession: (sessionId: string) => Promise<boolean>
       selectSession: (sessionId: string) => Promise<boolean>
@@ -107,17 +123,50 @@ function App() {
   const [settingsModal, setSettingsModal] = useState<SettingsModalState>(null)
   const [authMenuOpen, setAuthMenuOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  const [paneRatiosByGroup, setPaneRatiosByGroup] = useState<Record<string, number[]>>({})
 
   const hostRefs = useRef(new Map<string, HTMLDivElement>())
   const terminalRefs = useRef(new Map<string, LiveTerminal>())
   const outputBuffers = useRef(new Map<string, string[]>())
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const renameInputRef = useRef<HTMLInputElement | null>(null)
+  const splitDragRef = useRef<SplitDragState | null>(null)
 
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
     [sessions, selectedSessionId],
   )
+
+  const sessionGroups = useMemo<SessionGroup[]>(() => {
+    const grouped = new Map<string, SessionRecord[]>()
+    for (const session of sessions) {
+      const groupId = session.groupId || session.id
+      const current = grouped.get(groupId) ?? []
+      current.push(session)
+      grouped.set(groupId, current)
+    }
+
+    return [...grouped.entries()].map(([groupId, groupedSessions]) => {
+      const root =
+        groupedSessions.find((session) => session.id === groupId) ??
+        groupedSessions[0]
+
+      return {
+        id: groupId,
+        root,
+        sessions: groupedSessions,
+      }
+    })
+  }, [sessions])
+
+  const selectedGroup = useMemo(() => {
+    if (!selectedSession) {
+      return null
+    }
+    return sessionGroups.find((group) => group.id === selectedSession.groupId) ?? null
+  }, [selectedSession, sessionGroups])
+
+  const selectedSidebarSession = selectedGroup?.root ?? selectedSession
 
   const contextSession = useMemo(
     () => sessions.find((session) => session.id === contextMenu?.sessionId) ?? null,
@@ -147,7 +196,17 @@ function App() {
 
   const ensureTerminal = (sessionId: string) => {
     const host = hostRefs.current.get(sessionId)
-    if (!host || terminalRefs.current.has(sessionId)) {
+    if (!host) {
+      return
+    }
+
+    const existingLiveTerminal = terminalRefs.current.get(sessionId)
+    if (existingLiveTerminal) {
+      const currentElement = existingLiveTerminal.terminal.element
+      if (currentElement && currentElement.parentElement !== host) {
+        host.replaceChildren(currentElement)
+        existingLiveTerminal.fitAddon.fit()
+      }
       return
     }
 
@@ -227,6 +286,53 @@ function App() {
     return `${toolLabel} / ${authProfile ?? 'Default'}`
   }
 
+  const groupStatus = (group: SessionGroup | null) => {
+    if (!group) {
+      return 'closed'
+    }
+    if (group.sessions.some((session) => session.status === 'running')) {
+      return 'running'
+    }
+    if (group.sessions.some((session) => session.live && session.status === 'idle')) {
+      return 'idle'
+    }
+    return 'closed'
+  }
+
+  const paneLabel = (group: SessionGroup, session: SessionRecord) => {
+    const index = group.sessions.findIndex((item) => item.id === session.id)
+    return index >= 0 ? `Pane ${index + 1}` : session.name
+  }
+
+  function normalizedPaneRatios(group: SessionGroup | null) {
+    if (!group || group.sessions.length === 0) {
+      return []
+    }
+
+    const stored = paneRatiosByGroup[group.id]
+    const count = group.sessions.length
+    const minShare = Math.min(0.1, 1 / Math.max(count * 2, 2))
+
+    if (!stored?.length) {
+      return Array.from({ length: count }, () => 1 / count)
+    }
+
+    let ratios = [...stored]
+    if (ratios.length < count) {
+      const existingTotal = ratios.reduce((sum, value) => sum + value, 0)
+      const remaining = Math.max(1 - existingTotal, minShare * (count - ratios.length))
+      const addition = remaining / (count - ratios.length)
+      ratios = ratios.concat(Array.from({ length: count - ratios.length }, () => addition))
+    } else if (ratios.length > count) {
+      ratios = ratios.slice(0, count)
+    }
+
+    const total = ratios.reduce((sum, value) => sum + value, 0) || 1
+    return ratios.map((value) => value / total)
+  }
+
+  const currentPaneRatios = useMemo(() => normalizedPaneRatios(selectedGroup), [selectedGroup, paneRatiosByGroup])
+
   const openRename = (session: SessionRecord) => {
     setContextMenu(null)
     setRenameState({
@@ -263,6 +369,33 @@ function App() {
   const handleReopen = async (session: SessionRecord) => {
     setContextMenu(null)
     await window.terminalApi.reopenSession(session.id)
+  }
+
+  const handleSplit = async (session: SessionRecord) => {
+    setContextMenu(null)
+    setErrorMessage('')
+    try {
+      await window.terminalApi.splitSession(session.id)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to split terminal')
+    }
+  }
+
+  const handleStartPaneResize = (event: React.PointerEvent<HTMLDivElement>, index: number) => {
+    if (!selectedGroup || !workspaceRef.current) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    splitDragRef.current = {
+      groupId: selectedGroup.id,
+      index,
+      startX: event.clientX,
+      startRatios: currentPaneRatios,
+      width: workspaceRef.current.getBoundingClientRect().width,
+    }
   }
 
   const handleCreateSession = async () => {
@@ -478,7 +611,7 @@ function App() {
         return
       }
 
-      if (event.key !== 'F2' || !selectedSession) {
+      if (event.key !== 'F2' || !selectedSidebarSession) {
         return
       }
 
@@ -488,7 +621,7 @@ function App() {
       }
 
       event.preventDefault()
-      openRename(selectedSession)
+      openRename(selectedSidebarSession)
     }
 
     window.addEventListener('pointerdown', handleGlobalPointer)
@@ -497,7 +630,7 @@ function App() {
       window.removeEventListener('pointerdown', handleGlobalPointer)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [selectedSession])
+  }, [selectedSidebarSession])
 
   useEffect(() => {
     for (const session of sessions) {
@@ -518,29 +651,38 @@ function App() {
   }, [sessions])
 
   useEffect(() => {
-    if (!selectedSessionId) {
+    setPaneRatiosByGroup((current) => {
+      const next: Record<string, number[]> = {}
+      for (const group of sessionGroups) {
+        next[group.id] = normalizedPaneRatios(group)
+      }
+      return next
+    })
+  }, [sessionGroups])
+
+  useEffect(() => {
+    if (!selectedGroup || selectedGroup.sessions.length === 0) {
       return
     }
 
-    const liveTerminal = terminalRefs.current.get(selectedSessionId)
-    if (!liveTerminal) {
-      return
+    const resizeVisiblePanes = () => {
+      for (const session of selectedGroup.sessions) {
+        const liveTerminal = terminalRefs.current.get(session.id)
+        if (!liveTerminal) {
+          continue
+        }
+        liveTerminal.fitAddon.fit()
+        void window.terminalApi.resize(session.id, liveTerminal.terminal.cols, liveTerminal.terminal.rows)
+        if (session.id === selectedSessionId) {
+          liveTerminal.terminal.focus()
+        }
+      }
     }
 
-    const resize = () => {
-      liveTerminal.fitAddon.fit()
-      void window.terminalApi.resize(
-        selectedSessionId,
-        liveTerminal.terminal.cols,
-        liveTerminal.terminal.rows,
-      )
-      liveTerminal.terminal.focus()
-    }
-
-    requestAnimationFrame(resize)
+    requestAnimationFrame(resizeVisiblePanes)
 
     const observer = new ResizeObserver(() => {
-      resize()
+      resizeVisiblePanes()
     })
 
     if (workspaceRef.current) {
@@ -548,7 +690,53 @@ function App() {
     }
 
     return () => observer.disconnect()
-  }, [selectedSessionId, sessions])
+  }, [selectedGroup, selectedSessionId, sessions, currentPaneRatios])
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = splitDragRef.current
+      if (!drag || drag.width <= 0) {
+        return
+      }
+
+      const minShare = 0.16
+      const deltaRatio = (event.clientX - drag.startX) / drag.width
+      const nextRatios = [...drag.startRatios]
+      const left = nextRatios[drag.index] ?? 0
+      const right = nextRatios[drag.index + 1] ?? 0
+      const combined = left + right
+
+      let nextLeft = left + deltaRatio
+      let nextRight = right - deltaRatio
+
+      if (nextLeft < minShare) {
+        nextLeft = minShare
+        nextRight = combined - minShare
+      } else if (nextRight < minShare) {
+        nextRight = minShare
+        nextLeft = combined - minShare
+      }
+
+      nextRatios[drag.index] = nextLeft
+      nextRatios[drag.index + 1] = nextRight
+
+      setPaneRatiosByGroup((current) => ({
+        ...current,
+        [drag.groupId]: nextRatios,
+      }))
+    }
+
+    const handlePointerUp = () => {
+      splitDragRef.current = null
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
 
   useEffect(() => {
     if (!renameState?.sessionId) {
@@ -577,9 +765,17 @@ function App() {
       <header className="launchbar">
         <div className="launchbar-main">
           <div className="launchbar-head">
-            <div>
+            <div className="launchbar-branding">
+              <div className="brand-mark" aria-hidden="true">
+                <span className="brand-mark-panel brand-mark-panel-top" />
+                <span className="brand-mark-panel brand-mark-panel-middle" />
+                <span className="brand-mark-panel brand-mark-panel-bottom" />
+                <span className="brand-mark-cursor" />
+              </div>
+              <div>
               <div className="launchbar-title">New Terminal</div>
               <div className="launchbar-subtitle">Start a new shell in any project folder.</div>
+              </div>
             </div>
             <div className="launchbar-meta">
               <span className="hint-chip">Press Enter to create</span>
@@ -720,25 +916,25 @@ function App() {
         <aside className="sidebar">
           <div className="sidebar-header">
             <span>Terminals</span>
-            <span>{sessions.length}</span>
+            <span>{sessionGroups.length}</span>
           </div>
 
           <div className="session-list">
-            {sessions.map((session) => (
+            {sessionGroups.map((group) => (
               <button
-                key={session.id}
-                className={`session-card${selectedSessionId === session.id ? ' selected' : ''}`}
+                key={group.id}
+                className={`session-card${selectedGroup?.id === group.id ? ' selected' : ''}`}
                 onClick={() => {
                   setContextMenu(null)
-                  setSelectedSessionId(session.id)
-                  void window.terminalApi.selectSession(session.id)
+                  setSelectedSessionId(group.root.id)
+                  void window.terminalApi.selectSession(group.root.id)
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault()
-                  setSelectedSessionId(session.id)
-                  void window.terminalApi.selectSession(session.id)
+                  setSelectedSessionId(group.root.id)
+                  void window.terminalApi.selectSession(group.root.id)
                   setContextMenu({
-                    sessionId: session.id,
+                    sessionId: group.root.id,
                     x: event.clientX,
                     y: event.clientY,
                   })
@@ -746,32 +942,33 @@ function App() {
               >
                 <div className="session-main">
                   <div className="session-title">
-                    <span>{session.name}</span>
-                    <span className={`status-badge status-${session.status}`}>
-                      {session.status}
+                    <span>{group.root.name}</span>
+                    <span className={`status-badge status-${groupStatus(group)}`}>
+                      {groupStatus(group)}
                     </span>
                   </div>
-                  <div className="session-cwd">{session.cwd}</div>
+                  <div className="session-cwd">{group.root.cwd}</div>
                   <div className="session-meta">
-                    Auth: {authLabel(session.authTool, session.authProfile)}
+                    Auth: {authLabel(group.root.authTool, group.root.authProfile)}
                   </div>
+                  {group.sessions.length > 1 ? <div className="session-splits">{group.sessions.length} panes</div> : null}
                 </div>
                 <div className="session-actions">
                   <span
-                    className={`pin-badge${session.pinned ? ' active' : ''}`}
+                    className={`pin-badge${group.root.pinned ? ' active' : ''}`}
                     onClick={(event) => {
                       event.stopPropagation()
                       setContextMenu(null)
-                      void window.terminalApi.togglePin(session.id)
+                      void window.terminalApi.togglePin(group.root.id)
                     }}
                   >
-                    {session.pinned ? 'Pinned' : 'Pin'}
+                    {group.root.pinned ? 'Pinned' : 'Pin'}
                   </span>
                   <span
                     className="action-link"
                     onClick={(event) => {
                       event.stopPropagation()
-                      openRename(session)
+                      openRename(group.root)
                     }}
                   >
                     Rename
@@ -780,7 +977,7 @@ function App() {
                     className="action-link danger"
                     onClick={(event) => {
                       event.stopPropagation()
-                      void handleRemove(session)
+                      void handleRemove(group.root)
                     }}
                   >
                     Remove
@@ -794,17 +991,25 @@ function App() {
         <section className="workspace">
           <div className="workspace-header">
             <div>
-              <div className="workspace-title">{selectedSession?.name ?? 'No terminal selected'}</div>
-              <div className="workspace-subtitle">{selectedSession?.cwd ?? 'Create a terminal to start'}</div>
-              {selectedSession ? (
-                <div className="workspace-meta">Auth: {authLabel(selectedSession.authTool, selectedSession.authProfile)}</div>
+              <div className="workspace-title">{selectedSidebarSession?.name ?? 'No terminal selected'}</div>
+              <div className="workspace-subtitle">{selectedSidebarSession?.cwd ?? 'Create a terminal to start'}</div>
+              {selectedSidebarSession ? (
+                <div className="workspace-meta">
+                  Auth: {authLabel(selectedSidebarSession.authTool, selectedSidebarSession.authProfile)}
+                  {selectedGroup && selectedGroup.sessions.length > 1 ? ` • ${selectedGroup.sessions.length} panes` : ''}
+                </div>
               ) : null}
             </div>
             <div className="workspace-actions">
-              {selectedSession ? (
-                <span className={`status-badge status-${selectedSession.status}`}>
-                  {selectedSession.status}
+              {selectedGroup ? (
+                <span className={`status-badge status-${groupStatus(selectedGroup)}`}>
+                  {groupStatus(selectedGroup)}
                 </span>
+              ) : null}
+              {selectedSession ? (
+                <button className="ghost-button" onClick={() => void handleSplit(selectedSession)}>
+                  Split
+                </button>
               ) : null}
               {selectedSession && !selectedSession.live ? (
                 <button
@@ -820,21 +1025,86 @@ function App() {
           </div>
 
           <div className="workspace-body" ref={workspaceRef}>
-            {sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`terminal-host${selectedSessionId === session.id ? ' visible' : ''}`}
-                ref={(node) => {
-                  if (node) {
-                    hostRefs.current.set(session.id, node)
-                    ensureTerminal(session.id)
-                    return
-                  }
-                  hostRefs.current.delete(session.id)
-                }}
-                onClick={() => terminalRefs.current.get(session.id)?.terminal.focus()}
-              />
-            ))}
+            {selectedGroup?.sessions.map((session, index) => (
+              <React.Fragment key={session.id}>
+                <div
+                  className={`terminal-pane${selectedSessionId === session.id ? ' active' : ''}`}
+                  style={{ flexBasis: `${(currentPaneRatios[index] ?? 1 / selectedGroup.sessions.length) * 100}%` }}
+                  onClick={() => {
+                    setSelectedSessionId(session.id)
+                    void window.terminalApi.selectSession(session.id)
+                    terminalRefs.current.get(session.id)?.terminal.focus()
+                  }}
+                >
+                  <div className="terminal-pane-header">
+                    <div className="terminal-pane-title">
+                      <span>{selectedGroup ? paneLabel(selectedGroup, session) : session.name}</span>
+                      <span className="terminal-pane-path">{session.cwd}</span>
+                    </div>
+                    <div className="terminal-pane-actions">
+                      <span className={`status-badge status-${session.status}`}>{session.status}</span>
+                      <button
+                        className="icon-button"
+                        title="Split pane"
+                        aria-label="Split pane"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void handleSplit(session)
+                        }}
+                      >
+                        <span className="icon-split" aria-hidden="true">
+                          <span />
+                          <span />
+                        </span>
+                      </button>
+                      {!session.live ? (
+                        <button
+                          className="ghost-button compact-button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void handleReopen(session)
+                          }}
+                        >
+                          Reopen
+                        </button>
+                      ) : null}
+                      {selectedGroup && selectedGroup.sessions.length > 1 ? (
+                        <button
+                          className="icon-button danger-icon-button"
+                          title="Close pane"
+                          aria-label="Close pane"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void handleRemove(session)
+                          }}
+                        >
+                          <span className="icon-close" aria-hidden="true" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div
+                    className="terminal-host visible split-host"
+                    ref={(node) => {
+                      if (node) {
+                        hostRefs.current.set(session.id, node)
+                        ensureTerminal(session.id)
+                        return
+                      }
+                      hostRefs.current.delete(session.id)
+                    }}
+                  />
+                </div>
+                {selectedGroup && index < selectedGroup.sessions.length - 1 ? (
+                  <div
+                    className="pane-resizer"
+                    onPointerDown={(event) => handleStartPaneResize(event, index)}
+                  >
+                    <span className="pane-resizer-handle" />
+                  </div>
+                ) : null}
+              </React.Fragment>
+            )) ?? null}
           </div>
         </section>
       </main>
@@ -861,6 +1131,14 @@ function App() {
             }}
           >
             Rename
+          </button>
+          <button
+            className="context-item"
+            onClick={() => {
+              void handleSplit(contextSession)
+            }}
+          >
+            Split terminal
           </button>
           {!contextSession.live ? (
             <button

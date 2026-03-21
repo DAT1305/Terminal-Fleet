@@ -23,7 +23,7 @@ select {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 10px;
+  padding: 44px 10px 10px;
   gap: 10px;
   background: #0f0f0f;
 }
@@ -52,6 +52,58 @@ select {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+
+.launchbar-branding {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at top left, rgba(90, 150, 255, 0.28), transparent 52%),
+    linear-gradient(180deg, #182133 0%, #121826 100%);
+  border: 1px solid #263449;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 18px rgba(0, 0, 0, 0.24);
+}
+
+.brand-mark-panel {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
+}
+
+.brand-mark-panel-top {
+  top: 8px;
+}
+
+.brand-mark-panel-middle {
+  top: 15px;
+}
+
+.brand-mark-panel-bottom {
+  top: 22px;
+}
+
+.brand-mark-cursor {
+  position: absolute;
+  width: 6px;
+  height: 12px;
+  right: 8px;
+  bottom: 7px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #58b4ff 0%, #2b7fff 100%);
+  box-shadow: 0 0 10px rgba(56, 132, 255, 0.45);
 }
 
 .launchbar-title {
@@ -308,6 +360,12 @@ select {
   color: #7faeff;
 }
 
+.session-splits {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #9a9a9a;
+}
+
 .session-actions {
   display: flex;
   gap: 12px;
@@ -356,22 +414,184 @@ select {
 }
 
 .workspace-body {
-  position: relative;
   min-height: 0;
   flex: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px;
   background: #0f0f0f;
   border-radius: 0 0 10px 10px;
+  overflow: auto;
 }
 
 .terminal-host {
-  position: absolute;
-  inset: 0;
   padding: 8px;
   display: none;
 }
 
 .terminal-host.visible {
   display: block;
+}
+
+.terminal-pane {
+  min-height: 300px;
+  min-width: 240px;
+  border: 1px solid #202020;
+  border-radius: 10px;
+  background: #121212;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.terminal-pane.active {
+  border-color: #2b5fd9;
+  box-shadow: inset 0 0 0 1px rgba(43, 95, 217, 0.2);
+}
+
+.terminal-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #202020;
+  background: #151515;
+}
+
+.terminal-pane-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.terminal-pane-path {
+  font-size: 11px;
+  color: #8f8f8f;
+  font-weight: 400;
+  word-break: break-all;
+}
+
+.terminal-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.icon-button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #2c2c2c;
+  background: #181818;
+  color: #ececec;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.icon-button:hover {
+  background: #212121;
+}
+
+.danger-icon-button:hover {
+  background: #2a1717;
+  border-color: #5b2b2b;
+  color: #ffb2b2;
+}
+
+.icon-split {
+  position: relative;
+  width: 16px;
+  height: 14px;
+  display: inline-flex;
+  justify-content: space-between;
+  align-items: stretch;
+}
+
+.icon-split span {
+  width: 6px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.icon-split::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.icon-close {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+
+.icon-close::before,
+.icon-close::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 1px;
+  width: 12px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.icon-close::before {
+  transform: rotate(45deg);
+}
+
+.icon-close::after {
+  transform: rotate(-45deg);
+}
+
+.split-host {
+  position: relative;
+  inset: auto;
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane-resizer {
+  flex: 0 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.pane-resizer-handle {
+  width: 4px;
+  height: 52px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1e1e1e 0%, #343434 50%, #1e1e1e 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.pane-resizer:hover .pane-resizer-handle {
+  background: linear-gradient(180deg, #244aa0 0%, #3b82f6 50%, #244aa0 100%);
 }
 
 .context-menu {

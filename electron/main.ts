@@ -10,6 +10,7 @@ type AuthToolKey = 'codex-cli' | 'kimi-cli'
 
 type SessionRecord = {
   id: string
+  groupId: string
   name: string
   cwd: string
   authTool: AuthToolKey | null
@@ -206,11 +207,14 @@ function buildSessionRecord(
   name?: string,
   authTool?: string | null,
   authProfile?: string | null,
+  groupId?: string | null,
 ): SessionRecord {
   const trimmedName = name?.trim()
   const normalizedAuthTool = validateAuthTool(authTool)
+  const id = randomUUID()
   return {
-    id: randomUUID(),
+    id,
+    groupId: groupId?.trim() || id,
     name: trimmedName || path.basename(cwd) || cwd,
     cwd,
     authTool: normalizedAuthTool,
@@ -243,6 +247,19 @@ function sortedStates() {
     }
     return left.record.name.localeCompare(right.record.name)
   })
+}
+
+function groupStates(groupId: string) {
+  return sortedStates().filter((state) => state.record.groupId === groupId)
+}
+
+function groupRootState(groupId: string) {
+  const grouped = groupStates(groupId)
+  return grouped.find((state) => state.record.id === groupId) ?? grouped[0] ?? null
+}
+
+function normalizedGroupRootId(groupId: string) {
+  return groupRootState(groupId)?.record.id ?? groupId
 }
 
 function snapshot(): AppSnapshot {
@@ -496,7 +513,13 @@ function createWindow() {
     height: 860,
     backgroundColor: '#0f0f0f',
     autoHideMenuBar: true,
-    title: 'Terminal Fleet',
+    title: '',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#0f0f0f',
+      symbolColor: '#ececec',
+      height: 38,
+    },
     icon: appIconPath,
     webPreferences: {
       preload: preloadPath,
@@ -562,6 +585,7 @@ function loadPersistedState() {
         record.id,
         createSessionState({
           id: record.id,
+          groupId: typeof record.groupId === 'string' && record.groupId.trim() ? record.groupId : record.id,
           cwd: resolveCwd(record.cwd),
           name: record.name,
           authTool,
@@ -640,6 +664,31 @@ ipcMain.handle(
   },
 )
 
+ipcMain.handle('sessions:split', (_event, sessionId: string) => {
+  const source = sessionStates.get(sessionId)
+  if (!source) {
+    return null
+  }
+
+  const rootId = normalizedGroupRootId(source.record.groupId)
+  const record = buildSessionRecord(
+    source.record.cwd,
+    source.record.name,
+    source.record.authTool,
+    source.record.authProfile,
+    rootId,
+  )
+  const state = createSessionState(record)
+  sessionStates.set(record.id, state)
+  selectedSessionId = record.id
+  if (initialized) {
+    spawnSession(state)
+  }
+  persistState()
+  broadcastSessions()
+  return record.id
+})
+
 ipcMain.handle('auth:create-profile', (_event, authToolInput: string, profileInput: string) => {
   const authTool = validateAuthTool(authToolInput)
   const authProfile = validateAuthProfile(profileInput)
@@ -693,8 +742,48 @@ ipcMain.handle('sessions:remove', (_event, sessionId: string) => {
   if (!state) {
     return false
   }
-  killSession(state)
-  sessionStates.delete(sessionId)
+
+  const rootId = normalizedGroupRootId(state.record.groupId)
+  const removingRoot = state.record.id === rootId
+  const groupedStates = groupStates(rootId)
+
+  if (removingRoot && groupedStates.length > 1) {
+    const successor = groupedStates.find((groupedState) => groupedState.record.id !== sessionId) ?? null
+    if (!successor) {
+      return false
+    }
+
+    const previousRootRecord = { ...state.record }
+    killSession(state)
+    sessionStates.delete(sessionId)
+
+    successor.record.groupId = successor.record.id
+    successor.record.name = previousRootRecord.name
+    successor.record.pinned = previousRootRecord.pinned
+
+    for (const groupedState of groupedStates) {
+      if (groupedState.record.id === sessionId || groupedState.record.id === successor.record.id) {
+        continue
+      }
+      groupedState.record.groupId = successor.record.id
+    }
+
+    if (selectedSessionId === sessionId) {
+      selectedSessionId = successor.record.id
+    }
+  } else if (removingRoot) {
+    for (const groupedState of groupedStates) {
+      killSession(groupedState)
+      sessionStates.delete(groupedState.record.id)
+    }
+  } else {
+    killSession(state)
+    sessionStates.delete(sessionId)
+    if (selectedSessionId === sessionId) {
+      selectedSessionId = groupRootState(rootId)?.record.id ?? null
+    }
+  }
+
   if (sessionStates.size === 0) {
     const fallback = defaultSessionRecord()
     const fallbackState = createSessionState(fallback)

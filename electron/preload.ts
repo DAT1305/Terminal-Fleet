@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('terminalApi', {
   renameSession: (sessionId: string, name: string) =>
     ipcRenderer.invoke('sessions:rename', sessionId, name),
   togglePin: (sessionId: string) => ipcRenderer.invoke('sessions:toggle-pin', sessionId),
+  splitSession: (sessionId: string) => ipcRenderer.invoke('sessions:split', sessionId),
   removeSession: (sessionId: string) => ipcRenderer.invoke('sessions:remove', sessionId),
   reopenSession: (sessionId: string) => ipcRenderer.invoke('sessions:reopen', sessionId),
   selectSession: (sessionId: string) => ipcRenderer.invoke('sessions:select', sessionId),
